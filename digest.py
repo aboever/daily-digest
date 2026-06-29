@@ -138,8 +138,7 @@ def search_all_govt_jobs(usajobs_key):
 # ── INDUSTRY JOBS VIA INDEED + ZIPRECRUITER MCP ──────────────────────────────
 
 def search_industry_jobs(api_key):
-    """Search Indeed + ZipRecruiter via Anthropic MCP."""
-    client = anthropic.Anthropic(api_key=api_key)
+    """Search Indeed + ZipRecruiter via Anthropic API with MCP servers (direct HTTP)."""
     prompt = """Search for full-time jobs for this candidate:
 - PhD Environmental Geochemistry, Georgia Tech (May 2026)
 - Skills: redox biogeochemistry, PFAS, groundwater remediation, contaminant cycling,
@@ -166,16 +165,47 @@ Each item: title, company, location, salary (string or "Not listed"), days_ago (
 url (exact from tool), southeast (bool: GA/FL/SC/NC/TN/AL/MS/LA/VA/KY).
 Return ONLY a JSON array."""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2000,
-        mcp_servers=[
-            {"type":"url","url":INDEED_MCP_URL,"name":"indeed"},
-            {"type":"url","url":ZIPRECRUITER_MCP_URL,"name":"ziprecruiter"},
-        ],
-        messages=[{"role":"user","content":prompt}],
-    )
-    return _parse_json(response, "industry jobs")
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key":         api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+                "anthropic-beta":    "mcp-client-2025-04-04",
+            },
+            json={
+                "model":       "claude-sonnet-4-6",
+                "max_tokens":  2000,
+                "mcp_servers": [
+                    {"type": "url", "url": INDEED_MCP_URL,       "name": "indeed"},
+                    {"type": "url", "url": ZIPRECRUITER_MCP_URL, "name": "ziprecruiter"},
+                ],
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"Industry jobs HTTP error: {e}")
+        return []
+
+    raw = ""
+    for block in data.get("content", []):
+        if block.get("type") == "text":
+            raw += block.get("text", "")
+
+    raw = raw.strip().replace("```json", "").replace("```", "").strip()
+    s, e = raw.find("["), raw.rfind("]")
+    if s == -1 or e == -1:
+        print(f"Warning: no JSON in industry jobs response. Raw: {raw[:300]}")
+        return []
+    try:
+        return json.loads(raw[s:e+1])
+    except json.JSONDecodeError as err:
+        print(f"JSON error in industry jobs: {err}\nRaw: {raw[s:s+300]}")
+        return []
 
 # ── WEB SEARCH: NICHE BOARDS, FELLOWSHIPS, LOCAL POSTDOCS, CONFERENCES ───────
 
