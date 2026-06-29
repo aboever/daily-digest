@@ -2,21 +2,26 @@ name: Daily Opportunity Digest
 
 on:
   schedule:
+    # Runs at 12:00 UTC = 8:00 AM Eastern Time
     - cron: '0 12 * * *'
   workflow_dispatch:
 
 jobs:
   send-digest:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.6.0
         with:
           python-version: '3.12'
+
       - name: Install dependencies
         run: pip install anthropic requests
+
       - name: Run digest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
