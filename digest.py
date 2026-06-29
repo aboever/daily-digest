@@ -17,22 +17,22 @@ import anthropic
 import requests
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-# All sensitive values come from GitHub Actions secrets (never hardcoded here)
 
 RECIPIENT_EMAIL = "tonyboever@gmail.com"
 SENDER_EMAIL    = "tonyboever@gmail.com"
 
-# Direct pages to fetch live — no search API needed
+# Direct pages to fetch live.
+# Geosyntec.com blocks bots, so we use their public Indeed listing page instead.
 PRIORITY_PAGES = [
     {
-        "name":      "Life Cycle Geo",
-        "url":       "https://www.lifecyclegeo.com/jobs/",
+        "name":         "Life Cycle Geo — Jobs Page",
+        "url":          "https://www.lifecyclegeo.com/jobs/",
         "empty_signal": "there are no open positions",
     },
     {
-        "name":      "Geosyntec Consultants",
-        "url":       "https://geosyntec.com/careers",
-        "empty_signal": None,  # just report page is live
+        "name":         "Geosyntec — Indeed Listings",
+        "url":          "https://www.indeed.com/cmp/Geosyntec-Consultants/jobs",
+        "empty_signal": None,
     },
 ]
 
@@ -94,7 +94,13 @@ STANDING_REMINDERS = [
 def fetch_priority_pages():
     """Fetch each priority employer page and report what's actually there."""
     results = []
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; digest-bot/1.0)"}
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
 
     for page in PRIORITY_PAGES:
         try:
@@ -105,17 +111,23 @@ def fetch_priority_pages():
             if page["empty_signal"] and page["empty_signal"] in text_lower:
                 status = "No current openings listed."
             else:
-                # Look for positive signals of active postings
                 signals = ["apply now", "open position", "we are hiring",
-                           "job opening", "full-time", "full time", "submit your resume"]
+                           "job opening", "full-time", "full time",
+                           "environmental scientist", "environmental engineer",
+                           "geologist", "geochemist", "hydrogeologist"]
                 has_jobs = any(s in text_lower for s in signals)
-                status = "✅ Active postings detected — visit to apply." if has_jobs else "Page live — review manually for postings."
+                status = (
+                    "✅ Active postings detected — visit to view openings."
+                    if has_jobs else
+                    "Page live — review manually for new postings."
+                )
 
             results.append({
                 "name":   page["name"],
                 "url":    page["url"],
                 "status": status,
             })
+
         except Exception as e:
             results.append({
                 "name":   page["name"],
@@ -128,7 +140,6 @@ def fetch_priority_pages():
 # ── ANTHROPIC SEARCH ──────────────────────────────────────────────────────────
 
 def build_search_years():
-    """Return current year, plus next year starting in October."""
     now = datetime.date.today()
     this_year = now.year
     if now.month >= 10:
@@ -142,42 +153,43 @@ def run_ai_search(api_key):
     today = datetime.date.today().strftime("%B %d, %Y")
 
     prompt = f"""You are a research assistant helping an environmental geochemist find opportunities.
-Today is {today}. Search the web for LIVE, CURRENT results only — no training data, no assumptions.
+Today is {today}. Search the web for current results. Include results you find in search snippets
+and job board listings — you do not need to visit every URL directly to include a result,
+but it must appear in a live search result from today, not from your training data.
 
 Researcher profile:
 - PhD Environmental Geochemistry, Georgia Tech (May 2026)
-- Expertise: redox biogeochemistry, contaminant cycling, PFAS, uranium, groundwater remediation
+- Expertise: redox biogeochemistry, contaminant cycling, PFAS, uranium, groundwater remediation,
+  in situ remediation (ISCO/ISCR, bioaugmentation), ICP-MS, PHREEQC, field science leadership
 - Prior industry: REGENESIS Bioremediation
-- Location: Atlanta, GA — open to remote/hybrid or travel within Southeast US
+- Location: Atlanta, GA — open to remote/hybrid or Southeast US
 - Priority employers: Geosyntec Consultants, Life Cycle Geo
 
-Search for and return ONLY verified live results in these three categories:
+Search for results in these categories:
 
-1. JOBS (3-5): Environmental consulting, geochemistry, or remediation roles at firms like
-   Arcadis, AECOM, Ramboll, Haley & Aldrich, Stantec — in Atlanta area or remote.
-   Only include if you can verify the posting exists today. If you cannot verify, exclude it.
+1. JOBS (3-5 results): Search Indeed, LinkedIn, and company sites for environmental consulting,
+   geochemistry, hydrogeology, or remediation roles at firms including Arcadis, AECOM, Ramboll,
+   Haley & Aldrich, Stantec, REGENESIS — in Atlanta area, remote, or hybrid.
+   Include the job title, company, location, and a direct link to apply.
 
-2. INDUSTRY CONFERENCES ({years}): Upcoming events where environmental consultants,
-   hydrogeologists, and remediation professionals network — NGWA, AEHS, RemTEC, Battelle,
-   SETAC, ITRC, regional environmental events. For Southeast US events, note that.
-   Only include events that have not yet occurred as of today.
+2. INDUSTRY CONFERENCES ({years}): Upcoming events where environmental consultants and
+   remediation professionals network — NGWA, AEHS, RemTEC, Battelle, SETAC, ITRC, A&WMA,
+   and regional Southeast events. Only include events that have NOT yet occurred as of today.
 
-3. CALLS FOR ABSTRACTS ({years}): Active calls with future deadlines relevant to
-   biogeochemistry, environmental geochemistry, contaminant science, or remediation.
-   Only include if the deadline is in the future.
+3. CALLS FOR ABSTRACTS ({years}): Active calls with deadlines still in the future,
+   relevant to biogeochemistry, contaminant science, or environmental remediation.
 
 Return a JSON array. Each item must have:
   type: "job" | "conference" | "cfa"
   title: string
   org: string
-  location: string (city/state or "Remote")
-  date: string (event date, deadline, or posting date)
-  desc: string (1-2 sentences on relevance — for conferences, who attends)
-  url: string (direct link you verified exists)
+  location: string
+  date: string
+  desc: string (1-2 sentences on why relevant)
+  url: string
   southeast: boolean (true if in GA, FL, SC, NC, TN, AL, MS, LA, VA, KY)
 
-Return ONLY the JSON array. No markdown, no preamble. If you cannot find verified results
-for a category, return an empty array for that type — do not fabricate."""
+Return ONLY the JSON array. No markdown fences, no explanation outside the JSON."""
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
@@ -186,17 +198,17 @@ for a category, return an empty array for that type — do not fabricate."""
         messages=[{"role": "user", "content": prompt}],
     )
 
-    # Extract text from response
     raw = ""
     for block in response.content:
         if block.type == "text":
             raw += block.text
 
-    # Parse JSON
     raw = raw.strip()
     start = raw.find("[")
     end   = raw.rfind("]")
     if start == -1 or end == -1:
+        print("Warning: no JSON array found in AI response")
+        print("Raw response:", raw[:500])
         return []
 
     return json.loads(raw[start:end + 1])
@@ -204,12 +216,12 @@ for a category, return an empty array for that type — do not fabricate."""
 # ── STANDING REMINDERS ────────────────────────────────────────────────────────
 
 def get_upcoming_reminders():
-    """Return only reminders whose end date has not yet passed."""
     today = datetime.date.today()
     soon  = today + datetime.timedelta(days=14)
     upcoming = []
     for r in STANDING_REMINDERS:
         if r["end"] >= today:
+            r = dict(r)
             r["imminent"] = r["start"] <= soon
             upcoming.append(r)
     return upcoming
@@ -221,7 +233,6 @@ def badge(text, color):
         "red":    ("fff0f0", "c0392b"),
         "green":  ("f0fff4", "27ae60"),
         "yellow": ("fffbea", "7a5c00"),
-        "orange": ("fff3cd", "856404"),
     }
     bg, fg = colors.get(color, ("f0f0f0", "333333"))
     return (f"<span style='background:#{bg};color:#{fg};font-size:11px;"
@@ -229,17 +240,19 @@ def badge(text, color):
             f"margin-right:4px;'>{text}</span>")
 
 def result_card(item):
-    badges = ""
+    b = ""
     if item.get("southeast"):
-        badges += badge("📍 Southeast", "green")
-    html  = f"<div style='margin-bottom:12px;padding:12px 14px;background:#fafafa;border:1px solid #e8e8e8;border-radius:6px;'>"
-    if badges:
-        html += f"<div style='margin-bottom:5px;'>{badges}</div>"
+        b += badge("📍 Southeast", "green")
+    html  = (f"<div style='margin-bottom:12px;padding:12px 14px;background:#fafafa;"
+             f"border:1px solid #e8e8e8;border-radius:6px;'>")
+    if b:
+        html += f"<div style='margin-bottom:5px;'>{b}</div>"
     url   = item.get("url", "#")
-    html += f"<p style='margin:0 0 3px;font-size:14px;font-weight:600;'><a href='{url}' style='color:#1a56db;text-decoration:none;'>{item['title']}</a></p>"
+    html += (f"<p style='margin:0 0 3px;font-size:14px;font-weight:600;'>"
+             f"<a href='{url}' style='color:#1a56db;text-decoration:none;'>{item['title']}</a></p>")
     meta  = " · ".join(filter(None, [item.get("org"), item.get("location"), item.get("date")]))
     html += f"<p style='margin:0 0 4px;font-size:12px;color:#888;'>{meta}</p>"
-    html += f"<p style='margin:0;font-size:13px;color:#555;line-height:1.5;'>{item.get('desc', '')}</p>"
+    html += f"<p style='margin:0;font-size:13px;color:#555;line-height:1.5;'>{item.get('desc','')}</p>"
     html += "</div>"
     return html
 
@@ -255,15 +268,14 @@ def build_html(today_str, priority_pages, ai_results, reminders):
     html = f"""<!DOCTYPE html>
 <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
 max-width:640px;margin:0 auto;padding:20px;color:#1a1a1a;">
-
 <div style="border-bottom:2px solid #1a56db;padding-bottom:12px;margin-bottom:20px;">
   <h1 style="font-size:18px;font-weight:600;margin:0;">Daily Opportunity Digest</h1>
   <p style="font-size:13px;color:#666;margin:4px 0 0;">{today_str} &nbsp;·&nbsp;
   Environmental Geochemistry | Remediation | Biogeochemistry</p>
 </div>"""
 
-    # Priority employer page status
-    html += section_header("⭐ Priority Employers — Live Page Check")
+    # Priority employer status
+    html += section_header("⭐ Priority Employers — Live Check")
     for p in priority_pages:
         html += (f"<div style='margin-bottom:10px;padding:10px 14px;background:#fafafa;"
                  f"border:1px solid #e8e8e8;border-radius:6px;'>"
@@ -272,21 +284,20 @@ max-width:640px;margin:0 auto;padding:20px;color:#1a1a1a;">
                  f"<p style='margin:0;font-size:13px;color:#555;'>{p['status']}</p></div>")
 
     # Jobs
+    html += section_header("💼 Jobs")
     if jobs:
-        html += section_header("💼 Jobs")
         for item in jobs:
             html += result_card(item)
     else:
-        html += section_header("💼 Jobs")
-        html += "<p style='font-size:13px;color:#888;'>No new verified postings found today.</p>"
+        html += "<p style='font-size:13px;color:#888;'>No new postings found today.</p>"
 
-    # Industry conferences
+    # Conferences
     if confs:
         html += section_header("🏭 Conferences & Industry Events")
         for item in confs:
             html += result_card(item)
 
-    # Calls for abstracts
+    # CFAs
     if cfas:
         html += section_header("📋 Calls for Abstracts")
         for item in cfas:
@@ -339,7 +350,7 @@ def send_email(html_body, subject, gmail_app_password):
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 
 def main():
-    anthropic_key     = os.environ["ANTHROPIC_API_KEY"]
+    anthropic_key      = os.environ["ANTHROPIC_API_KEY"]
     gmail_app_password = os.environ["GMAIL_APP_PASSWORD"]
 
     today_str = datetime.date.today().strftime("%A, %B %-d, %Y")
